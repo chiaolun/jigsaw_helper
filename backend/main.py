@@ -18,8 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from matching import PuzzleMatcher, MatchCandidate
-from segmentation import segment_piece_from_white_background, apply_mask_to_piece
+from matching import PuzzleMatcher, MatchCandidate, MatchPoint
 
 # Configuration
 SAVED_PUZZLES_DIR = Path(__file__).parent / "saved_puzzles"
@@ -196,13 +195,16 @@ async def websocket_match(websocket: WebSocket, puzzle_id: str):
     WebSocket endpoint for real-time puzzle piece matching.
 
     Client sends: Binary JPEG image data (camera frame)
-    Server sends: JSON with match candidates
+    Server sends: JSON with raw SIFT match points and debug info
     """
     await websocket.accept()
 
     # Verify puzzle exists
     if puzzle_id not in matchers:
-        await websocket.send_json({"error": "Puzzle not found"})
+        await websocket.send_json({
+            "error": "Puzzle not found",
+            "debug": {"stages": [f"ERROR: Puzzle '{puzzle_id}' not found in matchers"]}
+        })
         await websocket.close()
         return
 
@@ -220,46 +222,41 @@ async def websocket_match(websocket: WebSocket, puzzle_id: str):
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             if frame is None:
-                await websocket.send_json({"error": "Invalid frame", "matches": []})
-                continue
-
-            # Segment piece from white background
-            piece, mask, bbox = segment_piece_from_white_background(frame)
-
-            if piece is None:
                 await websocket.send_json({
-                    "matches": [],
-                    "processingTime": int((time.time() - start_time) * 1000),
-                    "pieceDetected": False,
+                    "error": "Invalid frame",
+                    "matchPoints": [],
+                    "debug": {
+                        "stages": ["ERROR: Failed to decode JPEG frame"],
+                        "bytesReceived": len(data),
+                    }
                 })
                 continue
 
-            # Apply mask and match
-            masked_piece = apply_mask_to_piece(piece, mask)
-            candidates = matcher.match_piece(masked_piece, mask)
+            # Raw SIFT matching on entire frame (no segmentation)
+            match_points, debug_info = matcher.match_frame_raw(frame, max_matches=50)
 
             processing_time = int((time.time() - start_time) * 1000)
 
-            # Send results
+            # Send results with debug info
             await websocket.send_json({
-                "matches": [
+                "matchPoints": [
                     {
-                        "id": c.id,
-                        "bbox": list(c.bbox),
-                        "center": list(c.center),
-                        "confidence": round(c.confidence, 3),
-                        "numMatches": c.num_matches,
+                        "framePt": list(mp.frame_pt),
+                        "refPt": list(mp.ref_pt),
+                        "distance": mp.distance,
                     }
-                    for c in candidates
+                    for mp in match_points
                 ],
                 "processingTime": processing_time,
-                "pieceDetected": True,
+                "debug": debug_info,
             })
 
     except WebSocketDisconnect:
         pass
     except Exception as e:
         print(f"WebSocket error: {e}")
+        import traceback
+        traceback.print_exc()
         await websocket.close()
 
 
