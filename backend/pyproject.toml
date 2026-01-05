@@ -1,0 +1,20 @@
+[project]
+name = "jigsaw-helper-backend"
+version = "0.1.0"
+description = "Backend for Jigsaw Puzzle Helper - matches puzzle pieces using SIFT features"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "python-multipart>=0.0.6",
+    "opencv-python>=4.9.0.80",
+    "numpy>=1.26.3",
+    "websockets>=12.0",
+    "pillow>=10.2.0",
+]
+
+[project.scripts]
+jigsaw-helper = "main:main"
+
+[tool.uv]
+dev-dependencies = []

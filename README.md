@@ -27,6 +27,7 @@ A web application that helps you solve jigsaw puzzles by matching pieces held to
 
 ### Backend
 - Python 3.10+
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
 - OpenCV with SIFT support
 - CUDA (optional, for GPU acceleration)
 
@@ -41,15 +42,16 @@ A web application that helps you solve jigsaw puzzles by matching pieces held to
 ```bash
 cd backend
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Install dependencies and run (uv creates venv automatically)
+uv run python main.py
+```
 
-# Install dependencies
-pip install -r requirements.txt
+Or to sync dependencies first:
 
-# Run the server
-python main.py
+```bash
+cd backend
+uv sync
+uv run python main.py
 ```
 
 The backend will start on `http://localhost:8000`.
