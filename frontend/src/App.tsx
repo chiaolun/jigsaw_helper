@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CameraView } from './components/CameraView';
+import { CameraView, CameraViewHandle } from './components/CameraView';
 import { PuzzleSelector } from './components/PuzzleSelector';
 import { useWebSocket } from './hooks/useWebSocket';
 import type { MatchPoint, PuzzleInfo, MatchResult, DebugInfo } from './types';
@@ -13,8 +13,10 @@ function App() {
   const [showSidebar, setShowSidebar] = useState(true);
   const [showDebug, setShowDebug] = useState(true);
   const [lastFrameUrl, setLastFrameUrl] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  // Refs for the visualization canvas
+  // Refs
+  const cameraRef = useRef<CameraViewHandle>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const puzzleImgRef = useRef<HTMLImageElement | null>(null);
   const frameImgRef = useRef<HTMLImageElement | null>(null);
@@ -24,6 +26,7 @@ function App() {
     setMatchPoints(result.matchPoints || []);
     setDebugInfo(result.debug || null);
     setProcessingTime(result.processingTime);
+    setIsProcessing(false);
   }, []);
 
   const { status, sendFrame } = useWebSocket({
@@ -32,8 +35,15 @@ function App() {
     autoConnect: true,
   });
 
-  // Capture frame and store for visualization
-  const handleFrame = useCallback((frame: Blob) => {
+  // Capture button handler
+  const handleCapture = useCallback(() => {
+    if (!cameraRef.current || status !== 'connected') return;
+
+    const frame = cameraRef.current.captureFrame();
+    if (!frame) return;
+
+    setIsProcessing(true);
+
     // Send to backend
     sendFrame(frame);
 
@@ -43,16 +53,17 @@ function App() {
       if (prev) URL.revokeObjectURL(prev);
       return url;
     });
-  }, [sendFrame]);
+  }, [sendFrame, status]);
 
-  // Camera is active when puzzle selected and connected
-  const isCameraActive = selectedPuzzle !== null && status === 'connected';
+  // Camera is active when puzzle selected
+  const isCameraActive = selectedPuzzle !== null;
 
   // Handle puzzle selection
   const handlePuzzleSelect = useCallback((puzzle: PuzzleInfo) => {
     setSelectedPuzzle(puzzle);
     setMatchPoints([]);
     setDebugInfo(null);
+    setLastFrameUrl(null);
     localStorage.setItem('lastPuzzleId', puzzle.id);
   }, []);
 
@@ -121,15 +132,30 @@ function App() {
     ctx.fillStyle = '#1f2937';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    if (!frameImg || !puzzleImg) {
+    if (!puzzleImg) {
       ctx.fillStyle = '#9ca3af';
       ctx.font = '16px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(
-        frameImg ? 'Loading puzzle image...' : 'Waiting for camera frame...',
-        canvas.width / 2,
-        canvas.height / 2
-      );
+      ctx.fillText('Select a puzzle to begin', canvas.width / 2, canvas.height / 2);
+      return;
+    }
+
+    if (!frameImg) {
+      // Show just the puzzle image centered
+      const scale = Math.min(
+        canvas.width / puzzleImg.width,
+        canvas.height / puzzleImg.height
+      ) * 0.9;
+      const w = puzzleImg.width * scale;
+      const h = puzzleImg.height * scale;
+      const x = (canvas.width - w) / 2;
+      const y = (canvas.height - h) / 2;
+      ctx.drawImage(puzzleImg, x, y, w, h);
+
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Click "Capture" to take a photo', canvas.width / 2, canvas.height - 20);
       return;
     }
 
@@ -166,30 +192,24 @@ function App() {
     ctx.fillStyle = 'white';
     ctx.font = 'bold 14px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Camera Frame', availableWidth / 2, 20);
+    ctx.fillText('Captured Frame', availableWidth / 2, 20);
     ctx.fillText('Reference Image', puzzleX + puzzleW / 2, 20);
 
     // Draw match lines
     if (matchPoints.length > 0) {
-      // Color gradient based on match distance
       const maxDist = Math.max(...matchPoints.map(m => m.distance), 1);
 
-      matchPoints.forEach((match, i) => {
-        // Frame point (left side)
+      matchPoints.forEach((match) => {
         const fx = frameX + (match.framePt[0] / frameImg.width) * frameW;
         const fy = frameY + (match.framePt[1] / frameImg.height) * frameH;
-
-        // Reference point (right side)
         const rx = puzzleX + (match.refPt[0] / puzzleImg.width) * puzzleW;
         const ry = puzzleY + (match.refPt[1] / puzzleImg.height) * puzzleH;
 
-        // Color based on distance (green = good, red = bad)
         const t = match.distance / maxDist;
         const r = Math.round(255 * t);
         const g = Math.round(255 * (1 - t));
         const color = `rgb(${r}, ${g}, 100)`;
 
-        // Draw line
         ctx.strokeStyle = color;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
@@ -197,7 +217,6 @@ function App() {
         ctx.lineTo(rx, ry);
         ctx.stroke();
 
-        // Draw keypoint circles
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(fx, fy, 4, 0, Math.PI * 2);
@@ -207,7 +226,6 @@ function App() {
         ctx.fill();
       });
 
-      // Draw match count
       ctx.fillStyle = 'white';
       ctx.font = 'bold 12px sans-serif';
       ctx.textAlign = 'left';
@@ -277,17 +295,44 @@ function App() {
 
         {/* Main area */}
         <main className="flex-1 flex flex-col gap-2 p-4 overflow-hidden">
-          {/* Hidden camera view (just for capturing frames) */}
-          <div className="hidden">
-            <CameraView
-              onFrame={handleFrame}
-              isActive={isCameraActive}
-              frameInterval={300}
-            />
+          {/* Top section: Camera preview + Capture button */}
+          <div className="flex gap-4 h-48">
+            {/* Camera preview */}
+            <div className="flex-1 relative">
+              <CameraView
+                ref={cameraRef}
+                isActive={isCameraActive}
+              />
+            </div>
+
+            {/* Capture button */}
+            <div className="flex flex-col justify-center">
+              <button
+                onClick={handleCapture}
+                disabled={status !== 'connected' || isProcessing}
+                className={`px-8 py-4 text-lg font-bold rounded-lg transition-all ${
+                  status === 'connected' && !isProcessing
+                    ? 'bg-green-600 hover:bg-green-700 text-white shadow-lg hover:shadow-xl'
+                    : 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                }`}
+              >
+                {isProcessing ? (
+                  <span className="flex items-center gap-2">
+                    <span className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></span>
+                    Processing...
+                  </span>
+                ) : (
+                  '📷 Capture'
+                )}
+              </button>
+              <p className="text-gray-400 text-sm mt-2 text-center">
+                {status !== 'connected' ? 'Connecting...' : 'Click to analyze'}
+              </p>
+            </div>
           </div>
 
           {/* Match visualization canvas */}
-          <div className="flex-1 relative">
+          <div className="flex-1 relative min-h-0">
             <canvas
               ref={canvasRef}
               className="w-full h-full"
@@ -331,7 +376,7 @@ function App() {
                   </div>
                 </div>
               ) : (
-                <div className="text-gray-500">No data yet. Start camera to see debug info.</div>
+                <div className="text-gray-500">No data yet. Capture a frame to see debug info.</div>
               )}
             </div>
           )}
@@ -351,7 +396,7 @@ function App() {
           )}
         </div>
         <div className="text-gray-400">
-          SIFT matching on full frame (no segmentation)
+          SIFT matching on captured frame
         </div>
       </footer>
     </div>
